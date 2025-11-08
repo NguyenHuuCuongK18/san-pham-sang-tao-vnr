@@ -1,34 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-// Single-file React app that mimics a Polysphere-like puzzle.
-// Mechanics: pieces are scrambled in 2D. As you rotate (drag/scroll)
-// the angle approaches a hidden target; when near it, pieces smoothly
-// interpolate back into perfect alignment to reveal the image.
-// No TypeScript, no extra CSS files.
+// Minigame: Multi-stage Polysphere-like puzzle featuring Vietnamese leaders
+// Players solve multiple stages, earning points based on solve speed
+// Faster solves = more points
 
-// HOW TO USE
-// 1) Drop this into your React project as src/App.js
-// 2) Run your app. Click & drag horizontally (or use the slider / mouse wheel)
-// 3) Swap image by entering a URL, or pick from the presets.
-//    To add your own assets, put them in public/ and reference
-//    them like "/my-photo.jpg".
-
-const PRESETS = [
-  // Public domain / example images; replace or add your own.
-  { label: "Portrait (provided)", url: "/assets/HoChiMinh1.jpg" },
-  {
-    label: "Mountains",
-    url: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=1200",
-  },
-  {
-    label: "City",
-    url: "https://images.unsplash.com/photo-1467269204594-9661b134dd2b?w=1200",
-  },
-  {
-    label: "Sea",
-    url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1200",
-  },
+// Stages featuring Vietnamese leaders
+const STAGES = [
+  { id: 1, name: "Hồ Chí Minh", url: "/assets/HoChiMinh1.jpg" },
+  { id: 2, name: "Võ Nguyên Giáp", url: "/assets/VoNguyenGiap.jpg" },
+  { id: 3, name: "Phan Bội Châu", url: "/assets/PhanBoiChau.jpg" },
+  { id: 4, name: "Trần Hưng Đạo", url: "/assets/TranHungDao.jpg" },
+  { id: 5, name: "Ngô Quyền", url: "/assets/NgoQuyen.jpg" },
+  { id: 6, name: "Lý Thường Kiệt", url: "/assets/LyThuongKiet.jpg" },
+  { id: 7, name: "Lê Lợi", url: "/assets/LeLoi.jpg" },
+  { id: 8, name: "Quang Trung", url: "/assets/QuangTrung.jpg" },
 ];
+
+const MAX_POINTS_PER_STAGE = 1000; // Maximum points for instant solve
+const MIN_POINTS_PER_STAGE = 100;  // Minimum points for slow solve
+const TIME_FOR_MIN_POINTS = 120;   // Seconds before reaching minimum points
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -44,30 +34,52 @@ function useImageSize(src) {
   return size;
 }
 
+// Calculate points based on time taken (faster = more points)
+function calculatePoints(seconds) {
+  if (seconds <= 0) return MAX_POINTS_PER_STAGE;
+  if (seconds >= TIME_FOR_MIN_POINTS) return MIN_POINTS_PER_STAGE;
+  // Linear interpolation from max to min points
+  const ratio = seconds / TIME_FOR_MIN_POINTS;
+  return Math.round(MAX_POINTS_PER_STAGE - (ratio * (MAX_POINTS_PER_STAGE - MIN_POINTS_PER_STAGE)));
+}
+
 export default function App() {
-  const [imgUrl, setImgUrl] = useState(PRESETS[0].url);
+  // Game state
+  const [gameState, setGameState] = useState("menu"); // "menu", "playing", "completed"
+  const [currentStageIndex, setCurrentStageIndex] = useState(0);
+  const [stageScores, setStageScores] = useState([]); // Array of {stage, time, points}
+  const [stageStartTime, setStageStartTime] = useState(null);
+  
+  const currentStage = STAGES[currentStageIndex];
+  const [imgUrl, setImgUrl] = useState(currentStage?.url || STAGES[0].url);
   const { w: imgW, h: imgH } = useImageSize(imgUrl);
 
   const containerRef = useRef(null);
   const [angle, setAngle] = useState(0); // user-controlled angle (radians)
   const [dragging, setDragging] = useState(false); // track pointer drag
   const rafRef = useRef(null); // for snapback animation
-  const secretAngle = useMemo(() => Math.random() * Math.PI * 2, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const secretAngle = useMemo(() => Math.random() * Math.PI * 2, [currentStageIndex]);
 
   const grid = 22; // number of tiles per side
   const [scrambleSeed] = useState(() => Math.random());
 
-  // Build tiles w/ deterministic scramble (based on scrambleSeed)
+  // Reset angle when stage changes
+  useEffect(() => {
+    setAngle(0);
+  }, [currentStageIndex]);
+
+  // Build tiles w/ deterministic scramble (based on scrambleSeed + stage)
   const tiles = useMemo(() => {
     const tiles = [];
-    const rng = mulberry32(Math.floor(scrambleSeed * 2 ** 31));
+    const rng = mulberry32(Math.floor((scrambleSeed + currentStageIndex) * 2 ** 31));
     for (let y = 0; y < grid; y++) {
       for (let x = 0; x < grid; x++) {
         tiles.push({ x, y, r1: rng(), r2: rng(), r3: rng() });
       }
     }
     return tiles;
-  }, [grid, scrambleSeed]);
+  }, [grid, scrambleSeed, currentStageIndex]);
 
   // drag to rotate
   useEffect(() => {
@@ -98,8 +110,6 @@ export default function App() {
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
 
-    // Wheel/scroll intentionally disabled to avoid accidental solves
-
     return () => {
       el.removeEventListener("pointerdown", onDown);
       window.removeEventListener("pointermove", onMove);
@@ -119,10 +129,38 @@ export default function App() {
   // completion check
   const solved = t > 0.985;
 
+  // Handle stage completion
+  useEffect(() => {
+    if (solved && gameState === "playing" && stageStartTime) {
+      const timeElapsed = (Date.now() - stageStartTime) / 1000; // seconds
+      const points = calculatePoints(timeElapsed);
+      
+      // Record score
+      const newScore = {
+        stage: currentStage.name,
+        time: timeElapsed,
+        points: points
+      };
+      setStageScores(prev => [...prev, newScore]);
+      
+      // Move to next stage or complete game
+      setTimeout(() => {
+        if (currentStageIndex < STAGES.length - 1) {
+          setCurrentStageIndex(prev => prev + 1);
+          setImgUrl(STAGES[currentStageIndex + 1].url);
+          setStageStartTime(Date.now());
+          setAngle(0);
+        } else {
+          setGameState("completed");
+        }
+      }, 1500); // Show completion message briefly
+    }
+  }, [solved, gameState, stageStartTime, currentStage, currentStageIndex]);
+
   // Snapback assist: when close enough and not dragging, gently ease angle to the secret
   useEffect(() => {
     // Only assist if near solution and not actively dragging
-    if (dragging || solved || t < 0.965) return;
+    if (dragging || solved || t < 0.965 || gameState !== "playing") return;
 
     cancelAnimationFrame(rafRef.current);
 
@@ -138,7 +176,7 @@ export default function App() {
     };
     rafRef.current = requestAnimationFrame(step);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [t, dragging, solved, secretAngle]);
+  }, [t, dragging, solved, secretAngle, gameState]);
 
   // layout sizes (responsive, preserve aspect of image area)
   const outerW = 720;
@@ -190,16 +228,135 @@ export default function App() {
     );
   });
 
+  // Start game handler
+  const startGame = () => {
+    setGameState("playing");
+    setCurrentStageIndex(0);
+    setStageScores([]);
+    setImgUrl(STAGES[0].url);
+    setStageStartTime(Date.now());
+    setAngle(0);
+  };
+
+  // Calculate current elapsed time
+  const currentElapsedTime = stageStartTime ? (Date.now() - stageStartTime) / 1000 : 0;
+
+  // Menu Screen
+  if (gameState === "menu") {
+    return (
+      <div style={styles.appRoot}>
+        <div style={styles.menuContainer}>
+          <h1 style={styles.menuTitle}>Trò chơi đố ảnh hạt 3D</h1>
+          <h2 style={styles.menuSubtitle}>Tìm hiểu về các lãnh tụ Việt Nam</h2>
+          <div style={styles.menuDescription}>
+            <p>Xoay hình để ghép các mảnh lại với nhau và khám phá các lãnh tụ Việt Nam!</p>
+            <p>Giải nhanh để được nhiều điểm hơn (tối đa 1000 điểm/màn)</p>
+            <p><strong>{STAGES.length} màn chơi</strong></p>
+          </div>
+          <button style={styles.startButton} onClick={startGame}>
+            Bắt đầu chơi
+          </button>
+          <div style={styles.leadersList}>
+            <h3>Các lãnh tụ trong game:</h3>
+            <ul>
+              {STAGES.map((stage, idx) => (
+                <li key={idx}>{stage.name}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Completion Screen
+  if (gameState === "completed") {
+    const totalScore = stageScores.reduce((sum, score) => sum + score.points, 0);
+    const totalTime = stageScores.reduce((sum, score) => sum + score.time, 0);
+    
+    return (
+      <div style={styles.appRoot}>
+        <div style={styles.completionContainer}>
+          <h1 style={styles.completionTitle}>🎉 Hoàn thành! 🎉</h1>
+          <div style={styles.totalScore}>
+            <div>Tổng điểm: <strong>{totalScore}</strong></div>
+            <div>Tổng thời gian: <strong>{totalTime.toFixed(1)}s</strong></div>
+          </div>
+          <div style={styles.scoreTable}>
+            <h3>Chi tiết từng màn:</h3>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Màn</th>
+                  <th style={styles.th}>Lãnh tụ</th>
+                  <th style={styles.th}>Thời gian</th>
+                  <th style={styles.th}>Điểm</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stageScores.map((score, idx) => (
+                  <tr key={idx}>
+                    <td style={styles.td}>{idx + 1}</td>
+                    <td style={styles.td}>{score.stage}</td>
+                    <td style={styles.td}>{score.time.toFixed(1)}s</td>
+                    <td style={styles.td}>{score.points}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button style={styles.startButton} onClick={startGame}>
+            Chơi lại
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Game Screen
   return (
     <div style={styles.appRoot}>
-      <h1 style={styles.title}>Polysphere-like Puzzle (React, single file)</h1>
-      <Controls
-        imgUrl={imgUrl}
-        setImgUrl={setImgUrl}
-        angle={angle}
-        setAngle={setAngle}
-        t={t}
-      />
+      <div style={styles.gameHeader}>
+        <h1 style={styles.title}>Trò chơi đố ảnh hạt 3D</h1>
+        <div style={styles.gameInfo}>
+          <div style={styles.stageInfo}>
+            Màn {currentStageIndex + 1}/{STAGES.length}: <strong>{currentStage.name}</strong>
+          </div>
+          <div style={styles.scoreInfo}>
+            Thời gian: <strong>{currentElapsedTime.toFixed(1)}s</strong> | 
+            Điểm hiện tại: <strong>{calculatePoints(currentElapsedTime)}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div style={styles.controls}>
+        <div style={styles.row}>
+          <label style={styles.label}>Góc xoay</label>
+          <input
+            type="range"
+            min="0"
+            max={Math.PI * 2}
+            step="0.001"
+            value={wrapAngle(angle) + Math.PI}
+            onChange={(e) => setAngle(parseFloat(e.target.value) - Math.PI)}
+            style={{ flex: 1 }}
+          />
+          <div style={{ width: 80, textAlign: "right" }}>
+            {wrapAngle(angle).toFixed(2)} rad
+          </div>
+        </div>
+        <div style={styles.row}>
+          <label style={styles.label}>Độ chính xác</label>
+          <div style={styles.meterBox}>
+            <div
+              style={{ ...styles.meterFill, width: `${(t * 100).toFixed(1)}%` }}
+            />
+          </div>
+          <div style={{ width: 80, textAlign: "right" }}>
+            {(t * 100).toFixed(1)}%
+          </div>
+        </div>
+      </div>
 
       <div style={styles.stageWrap}>
         <div
@@ -216,9 +373,8 @@ export default function App() {
             cursor: "grab",
             userSelect: "none",
           }}
-          title="Drag to rotate; pieces reassemble when you find the sweet spot"
+          title="Kéo để xoay; các mảnh sẽ ghép lại khi bạn tìm được góc đúng"
         >
-          {/* center the image area */}
           <div
             style={{
               position: "absolute",
@@ -232,7 +388,7 @@ export default function App() {
             {pieces}
             {solved && (
               <div style={styles.solvedBanner}>
-                <span>Perfect!</span>
+                <span>Hoàn thành!</span>
               </div>
             )}
           </div>
@@ -241,69 +397,9 @@ export default function App() {
 
       <footer style={styles.footer}>
         <span>
-          Tip: drag or scroll to change the angle. When the shimmer meter is
-          full, you solved it.
+          Mẹo: Kéo hoặc dùng thanh trượt để thay đổi góc xoay. Khi thanh "Độ chính xác" đầy, bạn đã giải xong!
         </span>
       </footer>
-    </div>
-  );
-}
-
-function Controls({ imgUrl, setImgUrl, angle, setAngle, t }) {
-  const [urlInput, setUrlInput] = useState(imgUrl);
-  useEffect(() => setUrlInput(imgUrl), [imgUrl]);
-
-  return (
-    <div style={styles.controls}>
-      <div style={styles.row}>
-        <label style={styles.label}>Angle</label>
-        <input
-          type="range"
-          min="0"
-          max={Math.PI * 2}
-          step="0.001"
-          value={wrapAngle(angle) + Math.PI} // keep slider continuous
-          onChange={(e) => setAngle(parseFloat(e.target.value) - Math.PI)}
-          style={{ flex: 1 }}
-        />
-        <div style={{ width: 80, textAlign: "right" }}>
-          {wrapAngle(angle).toFixed(2)} rad
-        </div>
-      </div>
-      <div style={styles.row}>
-        <label style={styles.label}>Image</label>
-        <select
-          value={imgUrl}
-          onChange={(e) => setImgUrl(e.target.value)}
-          style={styles.select}
-        >
-          {PRESETS.map((p) => (
-            <option key={p.url} value={p.url}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div style={styles.row}>
-        <label style={styles.label}>Custom URL</label>
-        <input
-          value={urlInput}
-          onChange={(e) => setUrlInput(e.target.value)}
-          placeholder="https://.../my-image.jpg"
-          style={styles.input}
-        />
-        <button onClick={() => setImgUrl(urlInput)} style={styles.button}>
-          Use
-        </button>
-      </div>
-      <div style={styles.row}>
-        <label style={styles.label}>Shimmer</label>
-        <div style={styles.meterBox}>
-          <div
-            style={{ ...styles.meterFill, width: `${(t * 100).toFixed(1)}%` }}
-          />
-        </div>
-      </div>
     </div>
   );
 }
@@ -346,6 +442,23 @@ const styles = {
     fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif",
   },
   title: { fontWeight: 700, margin: "0 0 16px", fontSize: 20 },
+  gameHeader: {
+    maxWidth: 720,
+    margin: "0 auto 16px auto",
+  },
+  gameInfo: {
+    display: "flex",
+    justifyContent: "space-between",
+    marginTop: 8,
+    fontSize: 14,
+    opacity: 0.9,
+  },
+  stageInfo: {
+    flex: 1,
+  },
+  scoreInfo: {
+    textAlign: "right",
+  },
   controls: {
     display: "grid",
     gridTemplateColumns: "1fr",
@@ -416,4 +529,97 @@ const styles = {
     letterSpacing: 0.3,
   },
   footer: { opacity: 0.8, textAlign: "center", marginTop: 8 },
+  // Menu styles
+  menuContainer: {
+    maxWidth: 600,
+    margin: "80px auto",
+    textAlign: "center",
+    background: "rgba(255,255,255,0.04)",
+    padding: 40,
+    borderRadius: 16,
+    boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+  },
+  menuTitle: {
+    fontSize: 36,
+    fontWeight: 700,
+    margin: "0 0 16px",
+    background: "linear-gradient(90deg,#78e0ff,#86ffa7)",
+    WebkitBackgroundClip: "text",
+    WebkitTextFillColor: "transparent",
+  },
+  menuSubtitle: {
+    fontSize: 20,
+    fontWeight: 400,
+    margin: "0 0 24px",
+    opacity: 0.9,
+  },
+  menuDescription: {
+    fontSize: 16,
+    lineHeight: 1.6,
+    marginBottom: 32,
+    opacity: 0.85,
+  },
+  startButton: {
+    padding: "16px 40px",
+    fontSize: 18,
+    fontWeight: 600,
+    borderRadius: 12,
+    border: "none",
+    background: "linear-gradient(90deg,#4a9eff,#5fd4a0)",
+    color: "#fff",
+    cursor: "pointer",
+    boxShadow: "0 4px 16px rgba(74,158,255,0.3)",
+    transition: "transform 0.2s, box-shadow 0.2s",
+  },
+  leadersList: {
+    marginTop: 40,
+    textAlign: "left",
+    fontSize: 14,
+    opacity: 0.8,
+  },
+  // Completion screen styles
+  completionContainer: {
+    maxWidth: 700,
+    margin: "60px auto",
+    textAlign: "center",
+    background: "rgba(255,255,255,0.04)",
+    padding: 40,
+    borderRadius: 16,
+    boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+  },
+  completionTitle: {
+    fontSize: 36,
+    fontWeight: 700,
+    margin: "0 0 24px",
+    background: "linear-gradient(90deg,#ffd700,#ffed4e)",
+    WebkitBackgroundClip: "text",
+    WebkitTextFillColor: "transparent",
+  },
+  totalScore: {
+    fontSize: 20,
+    marginBottom: 32,
+    display: "flex",
+    justifyContent: "space-around",
+    flexWrap: "wrap",
+    gap: 16,
+  },
+  scoreTable: {
+    marginBottom: 32,
+  },
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+    marginTop: 16,
+  },
+  th: {
+    padding: "12px 8px",
+    borderBottom: "2px solid rgba(255,255,255,0.2)",
+    textAlign: "left",
+    fontWeight: 600,
+  },
+  td: {
+    padding: "10px 8px",
+    borderBottom: "1px solid rgba(255,255,255,0.1)",
+    textAlign: "left",
+  },
 };
